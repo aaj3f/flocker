@@ -37,6 +37,16 @@ A CLI tool for managing Fluree Docker containers with ease. Flocker simplifies t
 - Docker Desktop or Docker Engine
 - Internet connection (for pulling remote images)
 
+If you don't have the `rust` toolchain installed, you can do so by running
+
+For Mac / Linux:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+> For Windows, see [Rust installation instructions](https://forge.rust-lang.org/infra/other-installation-methods.html)
+
 ## Installation
 
 Install Flocker using GitHub:
