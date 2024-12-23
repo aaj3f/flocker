@@ -43,9 +43,12 @@ impl From<bollard::errors::Error> for FlockerError {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::parallel;
+
     use super::*;
 
     #[test]
+    #[parallel]
     fn test_error_display() {
         let docker_err = FlockerError::Docker("connection failed".to_string());
         assert_eq!(docker_err.to_string(), "Docker error: connection failed");
@@ -55,6 +58,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn test_io_error_conversion() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let flocker_err: FlockerError = io_err.into();

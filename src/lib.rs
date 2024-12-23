@@ -11,8 +11,15 @@ pub mod config;
 pub mod docker;
 pub mod error;
 pub mod state;
+pub mod ui;
 
 /// Re-export commonly used types
+pub use cli::Cli;
+pub use config::FlureeConfig;
+pub use docker::{
+    manager::{DockerManager, DockerOperations},
+    types::{ContainerConfig, FlureeImage, LedgerInfo},
+};
 pub use error::FlockerError;
 pub use state::State;
 pub type Result<T> = std::result::Result<T, FlockerError>;

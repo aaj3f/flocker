@@ -87,18 +87,10 @@ impl ContainerInfo {
 }
 
 /// Persistent state for the Flocker application
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct State {
     /// Known containers, mapped by ID
     pub containers: std::collections::HashMap<String, ContainerInfo>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            containers: std::collections::HashMap::new(),
-        }
-    }
 }
 
 impl State {
@@ -126,20 +118,34 @@ impl State {
         })
     }
 
+    pub fn clear() -> Result<()> {
+        let config_path = Self::config_path()?;
+        if config_path.exists() {
+            fs::remove_file(&config_path).map_err(|e| FlockerError::ConfigFile {
+                path: config_path.clone(),
+                message: "Failed to remove config file".to_string(),
+                source: e.into(),
+            })?;
+        }
+        Ok(())
+    }
+
     /// Save current state to disk
     pub fn save(&self) -> Result<()> {
         let config_path = Self::config_path()?;
 
-        // Ensure config directory exists
+        // Create parent directory if it doesn't exist
         if let Some(parent) = config_path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 FlockerError::Config(format!("Failed to create config directory: {}", e))
             })?;
         }
 
+        // Serialize state to JSON with pretty printing
         let content = serde_json::to_string_pretty(self)
             .map_err(|e| FlockerError::Config(format!("Failed to serialize config: {}", e)))?;
 
+        // Write content to file
         fs::write(&config_path, content)
             .map_err(|e| FlockerError::Config(format!("Failed to write config: {}", e)))?;
 
@@ -148,14 +154,50 @@ impl State {
 
     /// Add or update a container in the state
     pub fn add_container(&mut self, info: ContainerInfo) -> Result<()> {
+        // Check if name is already in use by a different container
+        if let Some(existing) = self
+            .containers
+            .values()
+            .find(|c| c.name == info.name && c.id != info.id)
+        {
+            return Err(FlockerError::Config(format!(
+                "Container name '{}' is already in use by container {}",
+                info.name, existing.id
+            )));
+        }
+
+        // Save first to ensure directory exists
+        self.save()?;
         self.containers.insert(info.id.clone(), info);
         self.save()
     }
 
     /// Remove a container from the state
     pub fn remove_container(&mut self, container_id: &str) -> Result<()> {
+        if !self.containers.contains_key(container_id) {
+            return Err(FlockerError::Config(format!(
+                "Container {} not found in state",
+                container_id
+            )));
+        }
         self.containers.remove(container_id);
         self.save()
+    }
+
+    /// Find containers by name
+    pub fn find_containers_by_name(&self, name: &str) -> Vec<&ContainerInfo> {
+        self.containers
+            .values()
+            .filter(|c| c.name.contains(name))
+            .collect()
+    }
+
+    /// Find containers by status
+    pub fn find_containers_by_status(&self, running: bool) -> Vec<&ContainerInfo> {
+        self.containers
+            .values()
+            .filter(|c| c.last_start.is_some() == running)
+            .collect()
     }
 
     /// Get a container by ID
@@ -194,6 +236,12 @@ impl State {
 
     /// Get the path to the config file
     fn config_path() -> Result<PathBuf> {
+        // Check for test environment variable first
+        if let Ok(test_config_dir) = std::env::var("XDG_CONFIG_HOME") {
+            return Ok(PathBuf::from(test_config_dir).join("config.json"));
+        }
+
+        // Use default config path for normal operation
         let proj_dirs = ProjectDirs::from("com", "fluree", "flocker").ok_or_else(|| {
             FlockerError::Config("Failed to determine config directory".to_string())
         })?;
@@ -205,44 +253,60 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::{parallel, serial};
     use std::env;
     use tempfile::tempdir;
 
     #[test]
+    #[parallel]
     fn test_state_default() {
         let state = State::default();
         assert!(state.containers.is_empty());
     }
 
     #[test]
+    #[serial]
     fn test_state_save_load() {
         // Create a temporary directory for config
         let temp_dir = tempdir().unwrap();
-        env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+        let temp_path = temp_dir.path().to_owned();
+        env::set_var("XDG_CONFIG_HOME", &temp_path);
+        State::clear().unwrap();
 
+        // Create initial state
         let mut state = State::default();
         let container = ContainerInfo::new(
-            "test_container".to_string(),
+            "test1".to_string(),
             "test".to_string(),
-            9090,
+            8090,
             None,
             true,
             "latest".to_string(),
         );
-        state.add_container(container).unwrap();
+        state.containers.insert(container.id.clone(), container);
 
         // Save state
+        let config_path = State::config_path().unwrap();
+        println!("Config path: {:?}", config_path);
         state.save().unwrap();
 
-        // Load state
+        // Verify file contents
+        let content = fs::read_to_string(&config_path).unwrap();
+        println!("File contents:\n{}", content);
+
+        // Load state and verify
         let loaded = State::load().unwrap();
         assert_eq!(loaded.containers.len(), 1);
-        let loaded_container = loaded.containers.get("test_container").unwrap();
-        assert_eq!(loaded_container.port, 9090);
+        let loaded_container = loaded.containers.get("test1").unwrap();
+        assert_eq!(loaded_container.port, 8090);
         assert_eq!(loaded_container.name, "test");
+
+        // Keep temp_dir alive until end of test
+        drop(temp_dir);
     }
 
     #[test]
+    #[parallel]
     fn test_container_management() {
         let mut state = State::default();
 
@@ -275,5 +339,79 @@ mod tests {
         // Remove container
         state.remove_container("test1").unwrap();
         assert!(state.containers.is_empty());
+
+        // Test removing non-existent container
+        assert!(state.remove_container("test1").is_err());
+    }
+
+    #[test]
+    #[parallel]
+    fn test_container_name_uniqueness() {
+        let mut state = State::default();
+
+        // Add first container
+        let container1 = ContainerInfo::new(
+            "test1".to_string(),
+            "test".to_string(),
+            8090,
+            None,
+            true,
+            "latest".to_string(),
+        );
+        state.add_container(container1).unwrap();
+
+        // Try to add second container with same name
+        let container2 = ContainerInfo::new(
+            "test2".to_string(),
+            "test".to_string(),
+            8091,
+            None,
+            true,
+            "latest".to_string(),
+        );
+        assert!(state.add_container(container2).is_err());
+    }
+
+    #[test]
+    #[parallel]
+    fn test_find_containers() {
+        let mut state = State::default();
+
+        // Add containers with different states
+        let container1 = ContainerInfo::new(
+            "test1".to_string(),
+            "test-1".to_string(),
+            8090,
+            None,
+            true,
+            "latest".to_string(),
+        );
+        state.add_container(container1).unwrap();
+
+        let mut container2 = ContainerInfo::new(
+            "test2".to_string(),
+            "test-2".to_string(),
+            8091,
+            None,
+            true,
+            "latest".to_string(),
+        );
+        container2.last_start = Some("2024-01-01T00:00:00Z".to_string());
+        state.add_container(container2).unwrap();
+
+        // Test finding by name
+        let found = state.find_containers_by_name("test-1");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "test1");
+
+        // Test finding by status (running)
+        let running = state.find_containers_by_status(true);
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].id, "test2");
+
+        // Test finding by status (stopped)
+        let stopped = state.find_containers_by_status(false);
+        assert_eq!(stopped.len(), 1);
+        assert_eq!(stopped[0].id, "test1");
     }
 }

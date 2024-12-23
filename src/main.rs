@@ -4,8 +4,12 @@
 //! with Docker operations.
 
 use clap::Parser;
-use flocker::cli::{Cli, CliState};
-use flocker::docker::DockerManager;
+use flocker::{
+    cli::Cli,
+    docker::{DockerManager, DockerOperations},
+    state::{ContainerInfo, DataDirConfig, State},
+    ui::{ContainerUI, ImageUI},
+};
 use tracing::{debug, Level};
 
 #[tokio::main]
@@ -41,59 +45,116 @@ async fn main() -> flocker::Result<()> {
     // Create Docker manager
     let docker = DockerManager::new().await?;
 
-    // Create CLI interface
-    let mut cli = CliState::new();
-
-    debug!("Loading state");
-
     // Load state
-    cli.load_state()?;
+    let state = State::load().unwrap_or_default();
+    debug!("State loaded: {:?}", state);
+
+    // Create UI components
+    let mut container_ui = ContainerUI::new(state);
+    let image_ui = ImageUI::new();
 
     debug!("Checking for running container");
 
-    // Check for existing container if we have one saved
-    let container_id =
-        if let Some(container_id) = cli.try_running_existing_container(&docker).await? {
-            container_id.clone()
-        } else {
-            debug!("No running container found");
+    // Main application loop
+    loop {
+        // Check for existing container if we have one saved
+        if let Some(container_id) = container_ui.select_container(&docker).await? {
+            debug!("Selected existing container: {}", container_id);
 
-            // Get configuration from user
-            let (image, config, name) = cli.get_config(&docker).await?;
+            // Get container status
+            let status = docker.get_container_status(&container_id).await?;
 
-            // Create and start container
-            let container_id = docker
-                .create_and_start_container(&image.tag, &config.clone().into_docker_config(), &name)
-                .await?;
+            // Handle container actions
+            match status {
+                flocker::ContainerStatus::Running { .. } => {
+                    let action = container_ui.display_action_menu(true)?;
+                    match action {
+                        3 => {
+                            // Stop Container
+                            docker.stop_container(&container_id).await?;
+                            continue;
+                        }
+                        4 => {
+                            // Stop and Destroy Container
+                            docker.remove_container(&container_id).await?;
+                            container_ui.remove_container(&container_id)?;
+                            continue;
+                        }
+                        5 => break,    // Exit
+                        _ => continue, // Other actions not yet implemented
+                    }
+                }
+                flocker::ContainerStatus::Stopped { .. } => {
+                    let action = container_ui.display_action_menu(false)?;
+                    match action {
+                        0 => {
+                            // Start this container
+                            docker.start_container(&container_id).await?;
+                            continue;
+                        }
+                        1 => {
+                            // Destroy this container
+                            docker.remove_container(&container_id).await?;
+                            container_ui.remove_container(&container_id)?;
+                            continue;
+                        }
+                        _ => continue,
+                    }
+                }
+                flocker::ContainerStatus::NotFound => (),
+            }
+        }
 
-            // Create container info
-            let data_dir = config.data_mount.map(|path| {
-                let current_dir = std::env::current_dir().expect("Failed to get current directory");
-                let relative_path = if path.starts_with(&current_dir) {
-                    Some(pathdiff::diff_paths(&path, &current_dir).unwrap_or(path.clone()))
-                } else {
-                    None
-                };
-                flocker::state::DataDirConfig::new(path, relative_path)
-            });
+        // Create new container
+        debug!("Creating new container");
 
-            let container_info = flocker::state::ContainerInfo::new(
-                container_id.clone(),
-                name,
-                config.host_port,
-                data_dir,
-                config.detached,
-                image.tag.name().to_string(),
-            );
+        // Select image
+        let image = image_ui.select_image(&docker).await?;
 
-            // Update state with new container
-            cli.add_container(container_info)?;
+        // Get container configuration
+        let name = container_ui.get_container_name()?;
+        let port = container_ui.get_port_config(8090)?;
+        let data_mount = container_ui
+            .get_data_mount_config(&DataDirConfig::from_current_dir(&std::env::current_dir()?))?;
+        let detached = container_ui.get_detach_config(true)?;
 
-            container_id
-        };
+        let config = flocker::FlureeConfig::new(port, data_mount.clone(), detached);
+        config.validate()?;
 
-    // Display success message
-    cli.display_success(&container_id);
+        // Create and start container
+        let container_id = docker
+            .create_and_start_container(&image.tag, &config.clone().into_docker_config(), &name)
+            .await?;
+
+        // Create container info
+        let data_dir = data_mount.as_ref().map(|path| {
+            let current_dir = std::env::current_dir().expect("Failed to get current directory");
+            let relative_path = if path.starts_with(&current_dir) {
+                Some(pathdiff::diff_paths(path, &current_dir).unwrap_or(path.clone()))
+            } else {
+                None
+            };
+            DataDirConfig::new(path.clone(), relative_path)
+        });
+
+        let container_info = ContainerInfo::new(
+            container_id.clone(),
+            name,
+            port,
+            data_dir,
+            detached,
+            image.tag.name().to_string(),
+        );
+
+        // Update state with new container
+        container_ui.add_container(container_info)?;
+
+        // Display success message
+        container_ui.display_container_success(&container_id, port, data_mount.as_ref());
+
+        // Exit after container creation
+        break;
+    }
 
     Ok(())
 }

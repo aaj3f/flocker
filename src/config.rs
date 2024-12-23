@@ -100,9 +100,12 @@ impl FlureeConfig {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::parallel;
+
     use super::*;
 
     #[test]
+    #[parallel]
     fn test_default_config() {
         let config = FlureeConfig::default();
         assert_eq!(config.host_port, 8090);
@@ -111,6 +114,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn test_custom_config() {
         let config = FlureeConfig::new(9090, None, false);
         assert_eq!(config.host_port, 9090);
@@ -119,18 +123,21 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn test_invalid_port() {
         let config = FlureeConfig::new(80, None, true);
         assert!(config.validate().is_err());
     }
 
     #[test]
+    #[parallel]
     fn test_invalid_data_mount() {
         let config = FlureeConfig::new(8090, Some(PathBuf::from("/nonexistent/path")), true);
         assert!(config.validate().is_err());
     }
 
     #[test]
+    #[parallel]
     fn test_valid_data_mount() {
         // Create a temporary directory for testing
         let temp_dir = tempfile::tempdir().unwrap();
@@ -139,6 +146,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn test_relative_data_mount() {
         // Create a temporary directory and a relative path within it
         let temp_dir = tempfile::tempdir().unwrap();

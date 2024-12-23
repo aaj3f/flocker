@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use tracing::debug;
 
 use crate::config::FlureeConfig;
-use crate::docker::{DockerManager, FlureeImage};
+use crate::docker::{DockerManager, DockerOperations, FlureeImage};
 use crate::state::{DataDirConfig, State};
 use crate::{ContainerStatus, FlockerError, Result};
 
@@ -672,11 +672,7 @@ impl CliState {
                     println!("Last started: {}", style(time).yellow());
                 }
 
-                let options = vec![
-                    "Start this container",
-                    "Start a new container",
-                    "Destroy this container",
-                ];
+                let options = vec!["Start this container", "Destroy this container"];
                 let selection = Select::with_theme(&self.theme)
                     .with_prompt("What would you like to do?")
                     .items(&options)
@@ -691,13 +687,6 @@ impl CliState {
                         println!("\n{}", style("Container started successfully").green());
                     }
                     1 => {
-                        // User wants to start a new container
-                        println!(
-                            "\n{}",
-                            style("Proceeding to create new container...").cyan()
-                        );
-                    }
-                    2 => {
                         docker.remove_container(&id).await?;
                         println!("\n{}", style("Container removed successfully").green());
                         self.state.remove_container(&id)?;
@@ -760,15 +749,19 @@ pub struct Cli {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::parallel;
+
     use super::*;
 
     #[test]
+    #[parallel]
     fn test_cli_creation() {
         let _cli = CliState::new();
         // Simply verify we can create a CLI instance
     }
 
     #[test]
+    #[parallel]
     fn test_running_container_action_variants() {
         let variants = RunningContainerAction::variants();
         assert_eq!(variants.len(), 6);
@@ -776,6 +769,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn test_running_container_action_from_index() {
         assert!(matches!(
             RunningContainerAction::from_index(3),
@@ -785,6 +779,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn test_ledger_action_variants() {
         let variants = LedgerAction::variants();
         assert_eq!(variants.len(), 3);
@@ -792,6 +787,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn test_ledger_action_from_index() {
         assert!(matches!(
             LedgerAction::from_index(0),
