@@ -1,5 +1,5 @@
 //! Error types for the Flocker application.
-use std::{fmt, path::PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 
 /// Custom error type for Flocker operations

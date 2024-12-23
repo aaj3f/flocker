@@ -158,6 +158,11 @@ impl CliState {
         Self::default()
     }
 
+    /// Add a new container to state
+    pub fn add_container(&mut self, info: crate::state::ContainerInfo) -> Result<()> {
+        self.state.add_container(info)
+    }
+
     /// Load state from disk
     pub fn load_state(&mut self) -> Result<&State> {
         self.state = match State::load() {
@@ -177,8 +182,12 @@ impl CliState {
         Ok(&self.state)
     }
 
-    pub fn set_running_container(&mut self, container_id: Option<String>) -> Result<()> {
-        self.state.set_running_container(container_id)
+    /// Get container name from user
+    pub fn get_container_name(&self) -> Result<String> {
+        Input::with_theme(&self.theme)
+            .with_prompt("Enter a name for this container")
+            .interact()
+            .map_err(|e| FlockerError::UserInput(e.to_string()))
     }
 
     /// Try to run an existing container if one is saved in the state
@@ -186,22 +195,67 @@ impl CliState {
         &mut self,
         docker: &DockerManager,
     ) -> Result<Option<String>> {
-        if let Some(container_id) = self.state.running_container.clone() {
-            debug!("Running container set in state: {}", container_id);
-
-            let status = docker.get_container_status(&container_id).await?;
-
-            debug!("Container status: {:?}", status);
-
-            if matches!(status, ContainerStatus::NotFound) {
-                return Ok(None);
-            }
-
-            self.handle_running_container(docker, status).await?;
-            Ok(Some(container_id))
-        } else {
-            Ok(None)
+        let containers = self.state.get_containers().to_vec(); // Clone to avoid borrow issues
+        if containers.is_empty() {
+            return Ok(None);
         }
+
+        // Get status for all containers
+        let mut container_strings = Vec::new();
+        for c in &containers {
+            let status = docker
+                .get_container_status(&c.id)
+                .await
+                .unwrap_or(ContainerStatus::NotFound);
+            let status_color = match status {
+                ContainerStatus::Running { .. } => style("running").green(),
+                ContainerStatus::Stopped { .. } => style("stopped").yellow(),
+                ContainerStatus::NotFound => style("not found").red(),
+            };
+
+            container_strings.push(format!(
+                "{} [{}] (Image: {}, Port: {}, Last Start: {})",
+                style(&c.name).cyan(),
+                status_color,
+                style(&c.image_tag).yellow(),
+                style(&c.port).green(),
+                c.last_start
+                    .as_ref()
+                    .map(|t| t.to_string())
+                    .unwrap_or_else(|| "Never".to_string())
+            ));
+        }
+
+        // Add option for new container
+        let mut options = vec!["Create new container".to_string()];
+        options.extend(container_strings);
+
+        let selection = Select::with_theme(&self.theme)
+            .with_prompt("Select a container or create a new one")
+            .items(&options)
+            .default(0)
+            .interact()
+            .map_err(|e| FlockerError::UserInput(e.to_string()))?;
+
+        if selection == 0 {
+            return Ok(None);
+        }
+
+        let selected_container = containers[selection - 1].clone(); // Clone to avoid borrow issues
+        let status = docker.get_container_status(&selected_container.id).await?;
+
+        if matches!(status, ContainerStatus::NotFound) {
+            println!(
+                "\n{} {}",
+                style("Container no longer exists:").yellow(),
+                style(&selected_container.name).cyan()
+            );
+            self.state.remove_container(&selected_container.id)?;
+            return Ok(None);
+        }
+
+        self.handle_running_container(docker, status).await?;
+        Ok(Some(selected_container.id))
     }
 
     /// Handle ledger management for a container
@@ -446,9 +500,9 @@ impl CliState {
 
     /// Get port configuration from user
     pub fn get_port_config(&mut self) -> Result<u16> {
-        let default_port = self.state.last_port.unwrap_or(8090);
+        let (default_port, _, _) = self.state.get_default_settings();
 
-        let port = Input::with_theme(&self.theme)
+        Input::with_theme(&self.theme)
             .with_prompt("Enter host port to map to container port 8090")
             .default(default_port)
             .validate_with(|input: &u16| {
@@ -459,12 +513,7 @@ impl CliState {
                 }
             })
             .interact()
-            .map_err(|e| crate::error::FlockerError::UserInput(e.to_string()))?;
-
-        self.state.last_port = Some(port);
-        self.state.save()?;
-
-        Ok(port)
+            .map_err(|e| crate::error::FlockerError::UserInput(e.to_string()))
     }
 
     /// Get data mount configuration from user
@@ -480,11 +529,9 @@ impl CliState {
         }
 
         let current_dir = std::env::current_dir()?;
-        let default_path = self
-            .state
-            .last_data_dir
-            .clone()
-            .unwrap_or_else(|| DataDirConfig::from_current_dir(&current_dir));
+        let (_, default_data_dir, _) = self.state.get_default_settings();
+        let default_path =
+            default_data_dir.unwrap_or_else(|| DataDirConfig::from_current_dir(&current_dir));
 
         let path_str: String = Input::with_theme(&self.theme)
             .with_prompt("Enter path to mount (will be created if it doesn't exist)")
@@ -492,68 +539,61 @@ impl CliState {
             .interact()
             .map_err(|e| crate::error::FlockerError::UserInput(e.to_string()))?;
 
-        let mut relative_path = None;
-
         // Convert relative path to absolute path
-        let path = if PathBuf::from(&path_str).is_absolute() {
+        let absolute_path = if PathBuf::from(&path_str).is_absolute() {
             PathBuf::from(path_str)
         } else {
-            relative_path = Some(PathBuf::from(&path_str));
-            current_dir.join(path_str)
+            current_dir.join(&path_str)
         };
 
         // Create directory if it doesn't exist
-        if !path.exists() {
-            std::fs::create_dir_all(&path)?;
+        if !absolute_path.exists() {
+            std::fs::create_dir_all(&absolute_path)?;
             println!("{}", style("Created directory: ").green().bold());
-            println!("{}", style(path.display()).cyan());
+            println!("{}", style(absolute_path.display()).cyan());
         }
 
         // Get the absolute path with all symlinks resolved
         let canonical_path =
-            path.canonicalize()
+            absolute_path
+                .canonicalize()
                 .map_err(|e| crate::error::FlockerError::ConfigFile {
                     message: "Failed to resolve path".to_string(),
-                    path: path.clone(),
+                    path: absolute_path.clone(),
                     source: e.into(),
                 })?;
-
-        self.state.last_data_dir = Some(DataDirConfig::new(canonical_path.clone(), relative_path));
-        self.state.save()?;
 
         Ok(Some(canonical_path))
     }
 
     /// Get detach mode configuration from user
     pub fn get_detach_config(&mut self) -> Result<bool> {
-        let detach = Confirm::with_theme(&self.theme)
+        let (_, _, default_detached) = self.state.get_default_settings();
+
+        Confirm::with_theme(&self.theme)
             .with_prompt("Run container in background (detached mode)?")
-            .default(self.state.default_detached)
+            .default(default_detached)
             .interact()
-            .map_err(|e| crate::error::FlockerError::UserInput(e.to_string()))?;
-
-        self.state.default_detached = detach;
-        self.state.save()?;
-
-        Ok(detach)
+            .map_err(|e| crate::error::FlockerError::UserInput(e.to_string()))
     }
 
     /// Get complete configuration from user
     pub async fn get_config(
         &mut self,
         docker: &DockerManager,
-    ) -> Result<(FlureeImage, FlureeConfig)> {
+    ) -> Result<(FlureeImage, FlureeConfig, String)> {
         let image = self.select_image(docker).await?;
+        let name = self.get_container_name()?;
         let host_port = self.get_port_config()?;
         let data_mount = self.get_data_mount_config()?;
         let detached = self.get_detach_config()?;
 
-        let config = FlureeConfig::new(host_port, data_mount, detached);
+        let config = FlureeConfig::new(host_port, data_mount.clone(), detached);
         config.validate()?;
 
         self.config = Some(config.clone());
 
-        Ok((image, config))
+        Ok((image, config, name))
     }
 
     /// Handle running container actions
@@ -568,6 +608,7 @@ impl CliState {
                 name,
                 port,
                 data_dir,
+                started_at: _,
             } => {
                 println!(
                     "\n{} {}",
@@ -595,7 +636,7 @@ impl CliState {
                     Some(RunningContainerAction::StopAndDestroy) => {
                         docker.remove_container(&id).await?;
                         println!("\n{}", style("Container removed successfully").green());
-                        self.state.set_running_container(None)?;
+                        self.state.remove_container(&id)?;
                     }
                     Some(RunningContainerAction::ViewStats) => {
                         println!(
@@ -616,22 +657,52 @@ impl CliState {
                     None => unreachable!(),
                 }
             }
-            ContainerStatus::Stopped { id } => {
+            ContainerStatus::Stopped {
+                id,
+                name,
+                last_start,
+            } => {
                 println!(
-                    "\n{} {}",
+                    "\n{} {} ({})",
                     style("Found stopped container:").yellow(),
-                    style(&id[..12]).cyan()
+                    style(&name).cyan(),
+                    style(&id[..12]).dim()
                 );
+                if let Some(time) = last_start {
+                    println!("Last started: {}", style(time).yellow());
+                }
 
-                if Confirm::with_theme(&self.theme)
-                    .with_prompt("Would you like to remove this container?")
-                    .default(true)
+                let options = vec![
+                    "Start this container",
+                    "Start a new container",
+                    "Destroy this container",
+                ];
+                let selection = Select::with_theme(&self.theme)
+                    .with_prompt("What would you like to do?")
+                    .items(&options)
+                    .default(0)
                     .interact()
-                    .map_err(|e| crate::error::FlockerError::UserInput(e.to_string()))?
-                {
-                    docker.remove_container(&id).await?;
-                    println!("\n{}", style("Container removed successfully").green());
-                    self.state.set_running_container(None)?;
+                    .map_err(|e| FlockerError::UserInput(e.to_string()))?;
+
+                match selection {
+                    0 => {
+                        // Start the container
+                        docker.start_container(&id).await?;
+                        println!("\n{}", style("Container started successfully").green());
+                    }
+                    1 => {
+                        // User wants to start a new container
+                        println!(
+                            "\n{}",
+                            style("Proceeding to create new container...").cyan()
+                        );
+                    }
+                    2 => {
+                        docker.remove_container(&id).await?;
+                        println!("\n{}", style("Container removed successfully").green());
+                        self.state.remove_container(&id)?;
+                    }
+                    _ => unreachable!(),
                 }
             }
             ContainerStatus::NotFound => {

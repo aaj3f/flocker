@@ -46,26 +46,57 @@ impl DataDirConfig {
     }
 }
 
+/// Information about a Fluree container
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerInfo {
+    /// Container ID
+    pub id: String,
+    /// User-given name for the container
+    pub name: String,
+    /// Port mapping
+    pub port: u16,
+    /// Data directory configuration
+    pub data_dir: Option<DataDirConfig>,
+    /// Whether container is running in detached mode
+    pub detached: bool,
+    /// Image tag used for this container
+    pub image_tag: String,
+    /// Last start time
+    pub last_start: Option<String>,
+}
+
+impl ContainerInfo {
+    pub fn new(
+        id: String,
+        name: String,
+        port: u16,
+        data_dir: Option<DataDirConfig>,
+        detached: bool,
+        image_tag: String,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            port,
+            data_dir,
+            detached,
+            image_tag,
+            last_start: None,
+        }
+    }
+}
+
 /// Persistent state for the Flocker application
 #[derive(Debug, Serialize, Deserialize)]
 pub struct State {
-    /// Last used port mapping
-    pub last_port: Option<u16>,
-    /// Last used data directory
-    pub last_data_dir: Option<DataDirConfig>,
-    /// Whether to run in detached mode by default
-    pub default_detached: bool,
-    /// ID of the currently running container, if any
-    pub running_container: Option<String>,
+    /// Known containers, mapped by ID
+    pub containers: std::collections::HashMap<String, ContainerInfo>,
 }
 
 impl Default for State {
     fn default() -> Self {
         Self {
-            last_port: Some(8090),
-            last_data_dir: None,
-            default_detached: true,
-            running_container: None,
+            containers: std::collections::HashMap::new(),
         }
     }
 }
@@ -115,10 +146,50 @@ impl State {
         Ok(())
     }
 
-    /// Update the running container ID and save state
-    pub fn set_running_container(&mut self, container_id: Option<String>) -> Result<()> {
-        self.running_container = container_id;
+    /// Add or update a container in the state
+    pub fn add_container(&mut self, info: ContainerInfo) -> Result<()> {
+        self.containers.insert(info.id.clone(), info);
         self.save()
+    }
+
+    /// Remove a container from the state
+    pub fn remove_container(&mut self, container_id: &str) -> Result<()> {
+        self.containers.remove(container_id);
+        self.save()
+    }
+
+    /// Get a container by ID
+    pub fn get_container(&self, container_id: &str) -> Option<&ContainerInfo> {
+        self.containers.get(container_id)
+    }
+
+    /// Get all known containers
+    pub fn get_containers(&self) -> Vec<&ContainerInfo> {
+        self.containers.values().collect()
+    }
+
+    /// Update container status
+    pub fn update_container_status(
+        &mut self,
+        container_id: &str,
+        is_running: bool,
+        start_time: Option<String>,
+    ) -> Result<()> {
+        if let Some(container) = self.containers.get_mut(container_id) {
+            if is_running {
+                container.last_start = start_time;
+            }
+        }
+        self.save()
+    }
+
+    /// Get the most recently used container's settings as defaults for a new container
+    pub fn get_default_settings(&self) -> (u16, Option<DataDirConfig>, bool) {
+        self.containers
+            .values()
+            .max_by_key(|c| c.last_start.as_ref())
+            .map(|c| (c.port, c.data_dir.clone(), c.detached))
+            .unwrap_or((8090, None, true))
     }
 
     /// Get the path to the config file
@@ -140,31 +211,69 @@ mod tests {
     #[test]
     fn test_state_default() {
         let state = State::default();
-        assert_eq!(state.last_port, Some(8090));
-        assert!(state.last_data_dir.is_none());
-        assert!(state.default_detached);
-        assert!(state.running_container.is_none());
+        assert!(state.containers.is_empty());
     }
 
     #[test]
     fn test_state_save_load() {
         // Create a temporary directory for config
         let temp_dir = tempdir().unwrap();
-        // let config_dir = temp_dir.path().join("flocker");
-
-        // Override config directory for test
         env::set_var("XDG_CONFIG_HOME", temp_dir.path());
 
         let mut state = State::default();
-        state.last_port = Some(9090);
-        state.running_container = Some("test_container".to_string());
+        let container = ContainerInfo::new(
+            "test_container".to_string(),
+            "test".to_string(),
+            9090,
+            None,
+            true,
+            "latest".to_string(),
+        );
+        state.add_container(container).unwrap();
 
         // Save state
         state.save().unwrap();
 
         // Load state
         let loaded = State::load().unwrap();
-        assert_eq!(loaded.last_port, Some(9090));
-        assert_eq!(loaded.running_container, Some("test_container".to_string()));
+        assert_eq!(loaded.containers.len(), 1);
+        let loaded_container = loaded.containers.get("test_container").unwrap();
+        assert_eq!(loaded_container.port, 9090);
+        assert_eq!(loaded_container.name, "test");
+    }
+
+    #[test]
+    fn test_container_management() {
+        let mut state = State::default();
+
+        // Add container
+        let container = ContainerInfo::new(
+            "test1".to_string(),
+            "test-1".to_string(),
+            8090,
+            None,
+            true,
+            "latest".to_string(),
+        );
+        state.add_container(container).unwrap();
+        assert_eq!(state.containers.len(), 1);
+
+        // Get container
+        let container = state.get_container("test1").unwrap();
+        assert_eq!(container.name, "test-1");
+
+        // Update status
+        state
+            .update_container_status("test1", true, Some("2024-01-01T00:00:00Z".to_string()))
+            .unwrap();
+        let container = state.get_container("test1").unwrap();
+        assert_eq!(
+            container.last_start,
+            Some("2024-01-01T00:00:00Z".to_string())
+        );
+
+        // Remove container
+        state.remove_container("test1").unwrap();
+        assert!(state.containers.is_empty());
     }
 }

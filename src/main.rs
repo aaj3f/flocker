@@ -47,7 +47,7 @@ async fn main() -> flocker::Result<()> {
     debug!("Loading state");
 
     // Load state
-    let state = cli.load_state()?;
+    cli.load_state()?;
 
     debug!("Checking for running container");
 
@@ -59,16 +59,38 @@ async fn main() -> flocker::Result<()> {
             debug!("No running container found");
 
             // Get configuration from user
-            let (image, config) = cli.get_config(&docker).await?;
+            let (image, config, name) = cli.get_config(&docker).await?;
 
             // Create and start container
-            docker
-                .create_and_start_container(&image.tag, &config.clone().into_docker_config())
-                .await?
-        };
+            let container_id = docker
+                .create_and_start_container(&image.tag, &config.clone().into_docker_config(), &name)
+                .await?;
 
-    // Update state with new container
-    cli.set_running_container(Some(container_id.clone()))?;
+            // Create container info
+            let data_dir = config.data_mount.map(|path| {
+                let current_dir = std::env::current_dir().expect("Failed to get current directory");
+                let relative_path = if path.starts_with(&current_dir) {
+                    Some(pathdiff::diff_paths(&path, &current_dir).unwrap_or(path.clone()))
+                } else {
+                    None
+                };
+                flocker::state::DataDirConfig::new(path, relative_path)
+            });
+
+            let container_info = flocker::state::ContainerInfo::new(
+                container_id.clone(),
+                name,
+                config.host_port,
+                data_dir,
+                config.detached,
+                image.tag.name().to_string(),
+            );
+
+            // Update state with new container
+            cli.add_container(container_info)?;
+
+            container_id
+        };
 
     // Display success message
     cli.display_success(&container_id);

@@ -30,11 +30,17 @@ pub enum ContainerStatus {
         port: u16,
         /// Data directory if mounted
         data_dir: Option<String>,
+        /// Last start time
+        started_at: Option<String>,
     },
     /// Container exists but is not running
     Stopped {
         /// Container ID
         id: String,
+        /// Container name
+        name: String,
+        /// Last start time before stopping
+        last_start: Option<String>,
     },
     /// No container found
     NotFound,

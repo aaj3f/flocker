@@ -388,6 +388,19 @@ impl DockerManager {
                 let state = container.state.unwrap_or_default();
                 let running = state.running.unwrap_or(false);
 
+                let name = container
+                    .name
+                    .unwrap_or_default()
+                    .trim_start_matches('/')
+                    .to_string();
+                let started_at = state.started_at;
+
+                tracing::debug!("Container {} is running: {}", name, running);
+
+                if let Some(started_at) = started_at.clone() {
+                    tracing::debug!("Started at: {}", started_at);
+                }
+
                 if running {
                     let host_config = container.host_config.unwrap_or_default();
 
@@ -409,13 +422,16 @@ impl DockerManager {
 
                     Ok(ContainerStatus::Running {
                         id: container_id.to_string(),
-                        name: container.name.unwrap_or_default(),
+                        name,
                         port,
                         data_dir,
+                        started_at,
                     })
                 } else {
                     Ok(ContainerStatus::Stopped {
                         id: container_id.to_string(),
+                        name,
+                        last_start: started_at,
                     })
                 }
             }
@@ -446,11 +462,21 @@ impl DockerManager {
         Ok(())
     }
 
+    /// Start a stopped container
+    pub async fn start_container(&self, container_id: &str) -> Result<()> {
+        self.docker
+            .start_container(container_id, None::<StartContainerOptions<String>>)
+            .await
+            .map_err(|e| FlockerError::Docker(format!("Failed to start container: {}", e)))?;
+        Ok(())
+    }
+
     /// Create and start a new Fluree container
     pub async fn create_and_start_container(
         &self,
         image_tag: &Tag,
         config: &ContainerConfig,
+        name: &str,
     ) -> Result<String> {
         // Check if port is already in use
         if self.is_port_in_use(config.host_port).await? {
@@ -491,9 +517,14 @@ impl DockerManager {
             ..Default::default()
         };
 
+        let options = CreateContainerOptions {
+            name,
+            platform: None,
+        };
+
         let container = self
             .docker
-            .create_container(None::<CreateContainerOptions<String>>, container_config)
+            .create_container(Some(options), container_config)
             .await
             .map_err(|e| FlockerError::Docker(format!("Failed to create container: {}", e)))?;
 
