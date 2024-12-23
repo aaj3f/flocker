@@ -1,31 +1,32 @@
 //! Error types for the Flocker application.
-
-use std::fmt;
+use std::{fmt, path::PathBuf};
+use thiserror::Error;
 
 /// Custom error type for Flocker operations
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum FlockerError {
     /// Docker-related errors
+    #[error("Docker error: {0}")]
     Docker(String),
     /// Configuration errors
+    #[error("Configuration error: {0}")]
     Config(String),
+    /// Configuration file errors
+    #[error("{message} (configuration file path: {path}): {source}")]
+    ConfigFile {
+        /// Error message
+        message: String,
+        /// Path to the configuration file
+        path: PathBuf,
+        /// Source of the error
+        source: anyhow::Error,
+    },
     /// IO operation errors
+    #[error("IO error: {0}")]
     Io(std::io::Error),
     /// User interaction errors
+    #[error("User input error: {0}")]
     UserInput(String),
-}
-
-impl std::error::Error for FlockerError {}
-
-impl fmt::Display for FlockerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FlockerError::Docker(msg) => write!(f, "Docker error: {}", msg),
-            FlockerError::Config(msg) => write!(f, "Configuration error: {}", msg),
-            FlockerError::Io(err) => write!(f, "IO error: {}", err),
-            FlockerError::UserInput(msg) => write!(f, "User input error: {}", msg),
-        }
-    }
 }
 
 impl From<std::io::Error> for FlockerError {

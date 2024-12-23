@@ -11,13 +11,48 @@ use std::path::PathBuf;
 use crate::error::FlockerError;
 use crate::Result;
 
+/// Configuration for a data directory
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataDirConfig {
+    /// Relative path to the data directory
+    pub relative_path: Option<PathBuf>,
+    /// Absolute path to the data directory
+    pub absolute_path: PathBuf,
+}
+
+impl DataDirConfig {
+    pub fn new(absolute_path: PathBuf, relative_path: Option<PathBuf>) -> Self {
+        DataDirConfig {
+            relative_path,
+            absolute_path,
+        }
+    }
+
+    pub fn from_current_dir(current_dir: &PathBuf) -> Self {
+        let relative_path = "data";
+        let absolute_path = current_dir.join(relative_path);
+        DataDirConfig {
+            relative_path: Some(PathBuf::from("./data")),
+            absolute_path,
+        }
+    }
+
+    pub fn display_relative_path(&self) -> String {
+        if let Some(ref relative_path) = self.relative_path {
+            relative_path.to_string_lossy().to_string()
+        } else {
+            self.absolute_path.to_string_lossy().to_string()
+        }
+    }
+}
+
 /// Persistent state for the Flocker application
 #[derive(Debug, Serialize, Deserialize)]
 pub struct State {
     /// Last used port mapping
     pub last_port: Option<u16>,
     /// Last used data directory
-    pub last_data_dir: Option<PathBuf>,
+    pub last_data_dir: Option<DataDirConfig>,
     /// Whether to run in detached mode by default
     pub default_detached: bool,
     /// ID of the currently running container, if any
@@ -40,15 +75,24 @@ impl State {
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path()?;
 
+        tracing::debug!("Loading state from: {:?}", config_path);
+
         if !config_path.exists() {
+            tracing::debug!("No config file found, creating default state");
             return Ok(Self::default());
         }
 
-        let content = fs::read_to_string(&config_path)
-            .map_err(|e| FlockerError::Config(format!("Failed to read config: {}", e)))?;
+        let content = fs::read_to_string(&config_path).map_err(|e| FlockerError::ConfigFile {
+            message: "Failed to read config file".to_string(),
+            path: config_path.clone(),
+            source: e.into(),
+        })?;
 
-        serde_json::from_str(&content)
-            .map_err(|e| FlockerError::Config(format!("Failed to parse config: {}", e)))
+        serde_json::from_str(&content).map_err(|e| FlockerError::ConfigFile {
+            message: "Failed to parse config file".to_string(),
+            path: config_path.clone(),
+            source: e.into(),
+        })
     }
 
     /// Save current state to disk

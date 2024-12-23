@@ -49,8 +49,6 @@ async fn main() -> flocker::Result<()> {
     // Load state
     let state = cli.load_state()?;
 
-    debug!("State loaded: {:?}", state);
-
     debug!("Checking for running container");
 
     // Check for existing container if we have one saved

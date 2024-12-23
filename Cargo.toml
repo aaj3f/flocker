@@ -22,6 +22,7 @@ pad = "0.1"
 reqwest = { version = "0.12.9", features = ["json"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["std", "env-filter"] }
+thiserror = "2.0.9"
 
 [dev-dependencies]
 assert_cmd = "2.0"

@@ -64,11 +64,16 @@ impl FlureeConfig {
 
             // Try to canonicalize the path to ensure it's absolute and all symlinks are resolved
             path.canonicalize().map_err(|e| {
-                FlockerError::Config(format!(
-                    "Failed to resolve data mount path {}: {}",
-                    path.display(),
-                    e
-                ))
+                // FlockerError::Config(format!(
+                //     "Failed to resolve data mount path {}: {}",
+                //     path.display(),
+                //     e
+                // ))
+                FlockerError::ConfigFile {
+                    message: "Failed to resolve data mount path".to_string(),
+                    path: path.clone(),
+                    source: e.into(),
+                }
             })?;
         }
 

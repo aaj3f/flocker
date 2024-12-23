@@ -14,7 +14,7 @@ use tracing::debug;
 
 use crate::config::FlureeConfig;
 use crate::docker::{DockerManager, FlureeImage};
-use crate::state::State;
+use crate::state::{DataDirConfig, State};
 use crate::{ContainerStatus, FlockerError, Result};
 
 /// Available actions when a container is running
@@ -160,7 +160,20 @@ impl CliState {
 
     /// Load state from disk
     pub fn load_state(&mut self) -> Result<&State> {
-        self.state = State::load()?;
+        self.state = match State::load() {
+            Ok(state) => {
+                debug!("State loaded: {:?}", state);
+                state
+            }
+            Err(e) => {
+                println!(
+                    "{}\n{}",
+                    style("Failed to load state").red().bold(),
+                    style(e).red()
+                );
+                State::default()
+            }
+        };
         Ok(&self.state)
     }
 
@@ -471,18 +484,21 @@ impl CliState {
             .state
             .last_data_dir
             .clone()
-            .unwrap_or_else(|| current_dir.join("data"));
+            .unwrap_or_else(|| DataDirConfig::from_current_dir(&current_dir));
 
         let path_str: String = Input::with_theme(&self.theme)
             .with_prompt("Enter path to mount (will be created if it doesn't exist)")
-            .default(default_path.to_string_lossy().to_string())
+            .default(default_path.display_relative_path())
             .interact()
             .map_err(|e| crate::error::FlockerError::UserInput(e.to_string()))?;
+
+        let mut relative_path = None;
 
         // Convert relative path to absolute path
         let path = if PathBuf::from(&path_str).is_absolute() {
             PathBuf::from(path_str)
         } else {
+            relative_path = Some(PathBuf::from(&path_str));
             current_dir.join(path_str)
         };
 
@@ -494,15 +510,15 @@ impl CliState {
         }
 
         // Get the absolute path with all symlinks resolved
-        let canonical_path = path.canonicalize().map_err(|e| {
-            crate::error::FlockerError::Config(format!(
-                "Failed to resolve path {}: {}",
-                path.display(),
-                e
-            ))
-        })?;
+        let canonical_path =
+            path.canonicalize()
+                .map_err(|e| crate::error::FlockerError::ConfigFile {
+                    message: "Failed to resolve path".to_string(),
+                    path: path.clone(),
+                    source: e.into(),
+                })?;
 
-        self.state.last_data_dir = Some(canonical_path.clone());
+        self.state.last_data_dir = Some(DataDirConfig::new(canonical_path.clone(), relative_path));
         self.state.save()?;
 
         Ok(Some(canonical_path))
