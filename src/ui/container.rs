@@ -24,7 +24,7 @@ impl ContainerUI<DefaultUI> {
     pub fn new(state: State) -> Self {
         Self {
             state,
-            ui: DefaultUI::default(),
+            ui: DefaultUI,
         }
     }
 }

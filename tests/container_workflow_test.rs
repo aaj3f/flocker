@@ -7,7 +7,6 @@ use flocker::{
 };
 use serial_test::serial;
 use tempfile::tempdir;
-use tokio;
 
 // Mock UserInterface implementation for testing
 struct MockUserInterface;

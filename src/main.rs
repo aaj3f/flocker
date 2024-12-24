@@ -51,7 +51,7 @@ async fn main() -> flocker::Result<()> {
 
     // Create UI components
     let mut container_ui = ContainerUI::new(state);
-    let image_ui = ImageUI::new();
+    let image_ui = ImageUI;
 
     debug!("Checking for running container");
 

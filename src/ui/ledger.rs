@@ -31,14 +31,10 @@ impl LedgerAction {
 }
 
 /// Ledger management UI
+#[derive(Default)]
 pub struct LedgerUI;
 
 impl LedgerUI {
-    /// Create a new LedgerUI instance
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Format ledger information for display
     fn format_ledger_info(&self, ledger: &LedgerInfo) -> String {
         format!(

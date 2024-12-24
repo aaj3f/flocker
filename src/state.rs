@@ -6,7 +6,7 @@
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::FlockerError;
 use crate::Result;
@@ -28,7 +28,7 @@ impl DataDirConfig {
         }
     }
 
-    pub fn from_current_dir(current_dir: &PathBuf) -> Self {
+    pub fn from_current_dir(current_dir: &Path) -> Self {
         let relative_path = "data";
         let absolute_path = current_dir.join(relative_path);
         DataDirConfig {

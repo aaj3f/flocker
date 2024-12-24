@@ -1,10 +1,12 @@
-use assert_cmd::Command;
-use predicates::prelude::*;
+use std::io::Error;
+
+// use assert_cmd::Command;
+// use predicates::prelude::*;
 use serial_test::parallel;
 
 #[test]
 #[parallel]
-fn test_flocker_no_images() {
+fn test_flocker_no_images() -> Result<(), Error> {
     // let mut cmd = Command::cargo_bin("flocker").unwrap();
     // let assert = cmd.assert();
     // assert
@@ -12,7 +14,7 @@ fn test_flocker_no_images() {
     //     .stderr(predicate::str::contains("No Fluree images found"));
 
     // TODO: This needs to be updated
-    assert!(true);
+    Ok(())
 }
 
 // Note: More extensive integration tests would require:

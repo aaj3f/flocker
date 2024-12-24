@@ -66,14 +66,10 @@ impl Tag {
 }
 
 /// Image selection UI
+#[derive(Default)]
 pub struct ImageUI;
 
 impl ImageUI {
-    /// Create a new ImageUI instance
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Select a Fluree image
     pub async fn select_image(&self, docker: &DockerManager) -> Result<FlureeImage> {
         let options = ["Remote (Docker Hub)", "Local"];
