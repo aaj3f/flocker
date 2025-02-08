@@ -9,8 +9,9 @@ use chrono::TimeZone;
 use futures_util::stream::StreamExt;
 use std::collections::HashMap;
 
-use crate::cli::Tag;
+use crate::cli::hub::Tag;
 use crate::error::FlockerError;
+use crate::state::ContainerInfo;
 use crate::{ContainerStatus, Result};
 
 use super::types::*;
@@ -36,7 +37,7 @@ pub trait DockerOperations {
         image_tag: &Tag,
         config: &ContainerConfig,
         name: &str,
-    ) -> Result<String>;
+    ) -> Result<ContainerInfo>;
 
     /// List ledgers in a container
     async fn list_ledgers(&self, container_id: &str) -> Result<Vec<LedgerInfo>>;
@@ -199,7 +200,7 @@ impl DockerOperations for DockerManager {
         image_tag: &Tag,
         config: &ContainerConfig,
         name: &str,
-    ) -> Result<String> {
+    ) -> Result<ContainerInfo> {
         // Check if port is already in use
         if self.is_port_in_use(config.host_port).await? {
             return Err(FlockerError::Docker(format!(
@@ -255,10 +256,29 @@ impl DockerOperations for DockerManager {
             .await
             .map_err(|e| FlockerError::Docker(format!("Failed to start container: {}", e)))?;
 
-        Ok(container.id)
+        let container_id = container.id;
+
+        // Create container info
+        let data_dir = config
+            .data_mount_path
+            .as_ref()
+            .map(|path| crate::state::DataDirConfig::from_path_str(path));
+
+        let info = ContainerInfo::new(
+            container_id,
+            name.to_string(),
+            config.host_port,
+            data_dir,
+            true, // detached mode is handled in ContainerConfig
+            image_tag.name().to_string(),
+        );
+
+        Ok(info)
     }
 
     async fn get_container_stats(&self, container_id: &str) -> Result<String> {
+        use crate::cli::{format_bytes, Column, TableFormatter};
+
         let options = bollard::container::StatsOptions {
             stream: false,
             ..Default::default()
@@ -269,7 +289,7 @@ impl DockerOperations for DockerManager {
         if let Some(result) = futures_util::StreamExt::next(&mut stats).await {
             match result {
                 Ok(stats) => {
-                    // Format stats output similar to docker stats command
+                    // Calculate CPU percentage
                     let cpu_percent = if stats.cpu_stats.system_cpu_usage.is_some()
                         && stats.precpu_stats.system_cpu_usage.is_some()
                     {
@@ -288,18 +308,53 @@ impl DockerOperations for DockerManager {
                         0.0
                     };
 
+                    // Get memory stats
                     let mem_usage = stats.memory_stats.usage.unwrap_or(0);
                     let mem_limit = stats.memory_stats.limit.unwrap_or(1);
                     let mem_percent = (mem_usage as f64 / mem_limit as f64) * 100.0;
 
-                    Ok(format!(
-                        "CONTAINER ID        CPU %               MEM USAGE / LIMIT     MEM %\n{:<20} {:.2}%               {:.1}MB / {:.1}MB        {:.2}%",
-                        container_id,
-                        cpu_percent,
-                        mem_usage as f64 / 1024.0 / 1024.0,
-                        mem_limit as f64 / 1024.0 / 1024.0,
-                        mem_percent
-                    ))
+                    use crate::cli::terminal::get_terminal_width;
+
+                    // Get terminal width and calculate column widths
+                    let term_width = get_terminal_width() as usize;
+                    let id_width = (term_width * 25) / 100; // 25% of width
+                    let cpu_width = (term_width * 15) / 100; // 15% of width
+                    let usage_width = (term_width * 25) / 100; // 25% of width
+                    let limit_width = (term_width * 20) / 100; // 20% of width
+                    let percent_width = (term_width * 15) / 100; // 15% of width
+
+                    // Helper function to truncate strings
+                    fn truncate(s: &str, width: usize) -> String {
+                        if s.len() > width {
+                            format!("{}...", &s[..width.saturating_sub(3)])
+                        } else {
+                            s.to_string()
+                        }
+                    }
+
+                    // Create table formatter with dynamic widths
+                    let formatter = TableFormatter::new(vec![
+                        Column::new("CONTAINER ID", id_width),
+                        Column::new("CPU %", cpu_width),
+                        Column::new("MEM USAGE", usage_width),
+                        Column::new("MEM LIMIT", limit_width),
+                        Column::new("MEM %", percent_width),
+                    ]);
+
+                    // Format output with truncation
+                    let mut output = String::new();
+                    formatter.print_header();
+                    formatter.print_row(&[
+                        truncate(&container_id[..12], id_width),
+                        truncate(&format!("{:.2}%", cpu_percent), cpu_width),
+                        truncate(&format_bytes(mem_usage), usage_width),
+                        truncate(&format_bytes(mem_limit), limit_width),
+                        truncate(&format!("{:.1}%", mem_percent), percent_width),
+                    ]);
+
+                    output.push('\n'); // Add extra line for spacing
+
+                    Ok(output)
                 }
                 Err(e) => Err(FlockerError::Docker(format!(
                     "Failed to get container stats: {}",
@@ -315,17 +370,34 @@ impl DockerOperations for DockerManager {
         let options = Some(bollard::container::LogsOptions::<String> {
             stdout: true,
             stderr: true,
-            tail: tail.map(|t| t.to_string()).unwrap_or_default(),
+            tail: tail
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "1000".to_string()),
+            timestamps: true,
             ..Default::default()
         });
 
         let mut logs = self.docker.logs(container_id, options);
-        let mut output = String::new();
+        let mut log_lines = Vec::new();
 
         while let Some(log) = futures_util::StreamExt::next(&mut logs).await {
             match log {
                 Ok(log) => {
-                    output.push_str(&log.to_string());
+                    let log_str = log.to_string();
+                    // Docker timestamps are in format "2024-02-08T21:56:23.123456789Z"
+                    if let Some(timestamp_end) = log_str.find(' ') {
+                        if let Ok(timestamp) =
+                            chrono::DateTime::parse_from_rfc3339(&log_str[..timestamp_end])
+                        {
+                            let formatted_time = timestamp.format("%Y-%m-%d %H:%M:%S%.3f");
+                            let message = &log_str[timestamp_end + 1..];
+                            log_lines.push(format!("[{}] {}", formatted_time, message));
+                        } else {
+                            log_lines.push(log_str);
+                        }
+                    } else {
+                        log_lines.push(log_str);
+                    }
                 }
                 Err(e) => {
                     return Err(FlockerError::Docker(format!(
@@ -336,7 +408,8 @@ impl DockerOperations for DockerManager {
             }
         }
 
-        Ok(output)
+        // Reverse the lines so newest are at the bottom
+        Ok(log_lines.join(""))
     }
 
     async fn list_ledgers(&self, container_id: &str) -> Result<Vec<LedgerInfo>> {

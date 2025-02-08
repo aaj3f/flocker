@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::cli::Tag;
+use crate::cli::hub::Tag;
 
 /// Represents a Fluree Docker image
 #[derive(Debug, Clone)]

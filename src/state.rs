@@ -28,6 +28,21 @@ impl DataDirConfig {
         }
     }
 
+    /// Create a new DataDirConfig from a string path
+    pub fn from_path_str(path_str: &str) -> Self {
+        let absolute_path = std::path::PathBuf::from(path_str);
+        let current_dir = std::env::current_dir().expect("Failed to get current directory");
+        let relative_path = if absolute_path.starts_with(&current_dir) {
+            pathdiff::diff_paths(&absolute_path, &current_dir)
+        } else {
+            None
+        };
+        DataDirConfig {
+            relative_path,
+            absolute_path,
+        }
+    }
+
     pub fn from_current_dir(current_dir: &Path) -> Self {
         let relative_path = "data";
         let absolute_path = current_dir.join(relative_path);
@@ -74,6 +89,8 @@ impl ContainerInfo {
         detached: bool,
         image_tag: String,
     ) -> Self {
+        let last_start =
+            Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
         Self {
             id,
             name,
@@ -81,7 +98,7 @@ impl ContainerInfo {
             data_dir,
             detached,
             image_tag,
-            last_start: None,
+            last_start,
         }
     }
 }
@@ -207,7 +224,20 @@ impl State {
 
     /// Get all known containers
     pub fn get_containers(&self) -> Vec<&ContainerInfo> {
-        self.containers.values().collect()
+        let mut containers: Vec<&ContainerInfo> = self.containers.values().collect();
+        containers.sort_by(|a, b| b.last_start.cmp(&a.last_start));
+        containers
+    }
+
+    pub fn update_container_start_time(
+        &mut self,
+        container_id: &str,
+        start_time: String,
+    ) -> Result<()> {
+        if let Some(container) = self.containers.get_mut(container_id) {
+            container.last_start = Some(start_time);
+        }
+        self.save()
     }
 
     /// Update container status
