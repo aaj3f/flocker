@@ -20,6 +20,8 @@ pub struct LedgerInfo {
     pub commit_count: u64,
     pub size: u64,
     pub path: String,
+    pub flakes_count: String,
+    pub last_index: Option<u64>,
 }
 
 /// Represents container configuration options

@@ -7,6 +7,7 @@ use bollard::Docker;
 use chrono::TimeZone;
 #[allow(unused_imports)]
 use futures_util::stream::StreamExt;
+use num_format::{Locale, ToFormattedString};
 use std::collections::HashMap;
 
 use crate::cli::hub::Tag;
@@ -424,6 +425,12 @@ impl DockerOperations for DockerManager {
             "-not",
             "-path",
             "*/commit/*",
+            "-not",
+            "-path",
+            "*/index/*",
+            "-not",
+            "-path",
+            "*/txn/*",
         ];
 
         let output = self.exec_command(container_id, find_cmd).await?;
@@ -467,12 +474,34 @@ impl DockerOperations for DockerManager {
                         .and_then(|s| s.as_u64())
                         .unwrap_or(0);
 
+                    let flakes_count = json
+                        .get("branches")
+                        .and_then(|b| b.get(0))
+                        .and_then(|b| b.get("commit"))
+                        .and_then(|c| c.get("data"))
+                        .and_then(|d| d.get("flakes"))
+                        .and_then(|f| f.as_u64())
+                        .unwrap_or(0);
+
+                    let flakes_count = flakes_count.to_formatted_string(&Locale::en);
+
+                    let last_index = json
+                        .get("branches")
+                        .and_then(|b| b.get(0))
+                        .and_then(|b| b.get("commit"))
+                        .and_then(|b| b.get("index"))
+                        .and_then(|b| b.get("data"))
+                        .and_then(|i| i.get("t"))
+                        .and_then(|t| t.as_u64());
+
                     ledgers.push(LedgerInfo {
                         alias: ledger_alias.to_string(),
                         last_commit_time: last_commit_time.to_string(),
                         commit_count,
                         size,
                         path: path.to_string(),
+                        flakes_count,
+                        last_index,
                     });
                 }
             }

@@ -720,26 +720,80 @@ impl CliState {
     ) -> Result<()> {
         loop {
             // Get list of ledgers
-            let ledgers = docker.list_ledgers(container_id).await?;
+            let mut ledgers = docker.list_ledgers(container_id).await?;
 
             if ledgers.is_empty() {
                 println!("\n{}", style("No ledgers found").yellow());
                 return Ok(());
             }
 
-            // Format ledger information for display
-            let mut ledger_strings: Vec<String> = ledgers
+            ledgers.sort_by(|a, b| b.last_commit_time.cmp(&a.last_commit_time));
+
+            let raw_values: Vec<(String, String, String, Option<String>, String, String)> = ledgers
                 .iter()
                 .map(|ledger| {
                     let duration = format_duration_since(&ledger.last_commit_time)
                         .unwrap_or_else(|_| "unknown time ago".to_string());
                     let size = format_bytes(ledger.size);
+                    let commit_count = ledger.commit_count.to_string();
+                    let last_index = ledger.last_index.map(|i| i.to_string());
+                    let flakes_count = ledger.flakes_count.to_string();
+                    let alias = ledger.alias.clone();
+
+                    (
+                        alias,
+                        duration,
+                        commit_count,
+                        last_index,
+                        size,
+                        flakes_count,
+                    )
+                })
+                .collect();
+
+            // Step 2: Determine the max width for each field
+            let max_widths = raw_values.iter().fold(
+                (0, 0, 0, 0, 0, 0),
+                |(max_alias, max_duration, max_commits, max_index, max_size, max_flakes),
+                 (alias, duration, commits, index, size, flakes)| {
+                    (
+                        max_alias.max(alias.len()),
+                        max_duration.max(duration.len()),
+                        max_commits.max(commits.len()),
+                        max_index.max(index.as_ref().unwrap_or(&"None".to_string()).len()),
+                        max_size.max(size.len()),
+                        max_flakes.max(flakes.len()),
+                    )
+                },
+            );
+
+            let (alias_w, duration_w, commits_w, index_w, size_w, flakes_w) = max_widths;
+
+            // Format ledger information for display
+            let mut ledger_strings: Vec<String> = raw_values
+                .into_iter()
+                .map(|(alias, duration, commit_count, last_index, size, flakes_count)| {
                     format!(
-                        "{} (Last commit: {}, Commits: {}, Size: {})",
-                        style(&ledger.alias).cyan(),
+                        "{:<alias_w$} Last commit: {:<duration_w$}  Commits: {:<commits_w$}  Last Indexed Commit: {:<index_w$}  Size: {:<size_w$}  Flakes: {:<flakes_w$}",
+                        style(alias).cyan(),
                         style(duration).yellow(),
-                        style(&ledger.commit_count).green(),
-                        style(size).blue()
+                        style(commit_count.clone()).green(),
+                        match last_index {
+                            Some(i) => if i == commit_count {
+                                style(i).green()
+                            } else {
+                                style(i).yellow()
+                            },
+                            None => style("None".to_string()).red(),
+                        },
+                        style(size).blue(),
+                        style(flakes_count).blue(),
+                        alias_w = alias_w,
+                        duration_w = duration_w,
+                        commits_w = commits_w,
+                        index_w = index_w,
+                        size_w = size_w,
+                        flakes_w = flakes_w,
                     )
                 })
                 .collect();
