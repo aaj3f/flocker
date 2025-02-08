@@ -7,24 +7,15 @@
 //! - Manage container lifecycle
 
 pub mod cli;
-pub mod config;
+pub(crate) mod config;
 pub mod docker;
-pub mod error;
+pub(crate) mod error;
 pub mod state;
 
 // Re-export commonly used types
-pub use cli::{
-    ui::{DefaultUI, UserInterface},
-    Cli, CliState,
-};
-pub use config::FlureeConfig;
-use console::{style, StyledObject};
-pub use docker::{
-    manager::{DockerManager, DockerOperations},
-    types::{ContainerConfig, FlureeImage, LedgerInfo},
-};
-pub use error::FlockerError;
-pub use state::State;
+pub use cli::{Cli, CliState};
+pub use docker::manager::{DockerManager, DockerOperations};
+use error::FlockerError;
 pub type Result<T> = std::result::Result<T, FlockerError>;
 
 /// Container status information

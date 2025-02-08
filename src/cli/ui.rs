@@ -76,16 +76,16 @@ use std::path::PathBuf;
 use tracing::debug;
 
 use crate::{
-    cli::{format_bytes, format_duration_since, Column, TableFormatter},
+    cli::{format_bytes, format_duration_since},
     config::FlureeConfig,
-    docker::{DockerManager, DockerOperations, FlureeImage},
+    docker::{DockerOperations, FlureeImage},
     state::{ContainerInfo, DataDirConfig, State},
     ContainerStatus, FlockerError, Result,
 };
 
 use super::{
     actions::{LedgerAction, RunningContainerAction},
-    hub::{HubClient, Tag},
+    hub::HubClient,
 };
 
 /// Custom theme for container list formatting

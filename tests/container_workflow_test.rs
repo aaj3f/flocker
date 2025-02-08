@@ -2,10 +2,9 @@ use async_trait::async_trait;
 use flocker::{
     cli::{hub::Tag, CliState},
     docker::{ContainerConfig, DockerOperations, FlureeImage},
-    state::{ContainerInfo, State},
+    state::ContainerInfo,
     ContainerStatus, Result,
 };
-use serial_test::serial;
 use tempfile::tempdir;
 
 // Mock DockerManager for testing
