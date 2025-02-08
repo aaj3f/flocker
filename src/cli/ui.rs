@@ -4,6 +4,10 @@
 //! handling, including prompts, configuration, and display formatting.
 
 use console::style;
+use crossterm::{
+    cursor, execute,
+    terminal::{Clear, ClearType},
+};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 
 /// Common UI functionality shared across components
@@ -72,7 +76,7 @@ impl UserInterface for DefaultUI {
         println!("\n{}", style(message).yellow().bold());
     }
 }
-use std::path::PathBuf;
+use std::{io, path::PathBuf};
 use tracing::debug;
 
 use crate::{
@@ -464,7 +468,7 @@ impl CliState {
 
         // Create container info strings
         let mut raw_items = vec![];
-        let mut items = vec!["Create new container".to_string()];
+        let mut items = vec![];
         for c in &containers {
             let status = docker
                 .get_container_status(&c.id)
@@ -573,18 +577,38 @@ impl CliState {
             items.push(item);
         }
 
+        items.push("Create new container".to_string());
+        println!(
+            "{} Select a container or create a new one:",
+            style("?").yellow(),
+        );
+        println!(
+            "  {:<name_width$} {:<status_width$} {:<image_width$} {:<port_width$} {:<time_width$}",
+            style("Container").bold(),
+            style("Status").bold(),
+            style("Image").bold(),
+            style("Port").bold(),
+            style("Last Started").bold()
+        );
         let selection = Select::with_theme(&self.theme)
-            .with_prompt("Select a container or create a new one")
+            // .with_prompt("Select a container or create a new one")
             .items(&items)
             .default(0)
             .interact()
             .map_err(|e| FlockerError::UserInput(e.to_string()))?;
 
-        if selection == 0 {
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+
+        for _ in 0..2 {
+            execute!(handle, cursor::MoveUp(1), Clear(ClearType::CurrentLine)).unwrap();
+        }
+
+        if selection == items.len() - 1 {
             return Ok(None);
         }
 
-        let selected_container = containers[selection - 1].clone(); // Clone to avoid borrow issues
+        let selected_container = containers[selection].clone(); // Clone to avoid borrow issues
         let status = docker.get_container_status(&selected_container.id).await?;
 
         if matches!(status, ContainerStatus::NotFound) {
