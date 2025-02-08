@@ -31,7 +31,7 @@ impl Tag {
             self.name.clone()
         };
         format!(
-            "fluree/server:{} (updated {})",
+            "{} (updated {})",
             name,
             self.pretty_print_time()
                 .unwrap_or_else(|_| "unknown time ago".to_string())

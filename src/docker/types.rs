@@ -30,7 +30,6 @@ pub struct ContainerConfig {
     pub host_port: u16,
     pub container_port: u16,
     pub data_mount_path: Option<String>,
-    pub detach: bool,
 }
 
 impl ContainerConfig {
@@ -53,7 +52,6 @@ impl From<&crate::config::FlureeConfig> for ContainerConfig {
                 .data_mount
                 .as_ref()
                 .map(|path| Self::path_to_mount_string(path)),
-            detach: config.detached,
         }
     }
 }
@@ -64,7 +62,6 @@ impl Default for ContainerConfig {
             host_port: 8090,
             container_port: 8090,
             data_mount_path: None,
-            detach: true,
         }
     }
 }

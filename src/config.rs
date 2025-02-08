@@ -14,8 +14,6 @@ pub struct FlureeConfig {
     pub host_port: u16,
     /// Path to mount as container's data directory
     pub data_mount: Option<PathBuf>,
-    /// Whether to run in detached mode
-    pub detached: bool,
 }
 
 impl Default for FlureeConfig {
@@ -23,18 +21,16 @@ impl Default for FlureeConfig {
         Self {
             host_port: 8090,
             data_mount: None,
-            detached: true,
         }
     }
 }
 
 impl FlureeConfig {
     /// Create a new configuration with custom settings
-    pub fn new(host_port: u16, data_mount: Option<PathBuf>, detached: bool) -> Self {
+    pub fn new(host_port: u16, data_mount: Option<PathBuf>) -> Self {
         Self {
             host_port,
             data_mount,
-            detached,
         }
     }
 
@@ -93,7 +89,6 @@ impl FlureeConfig {
             host_port: self.host_port,
             container_port: 8090,
             data_mount_path,
-            detach: self.detached,
         }
     }
 }
@@ -110,29 +105,27 @@ mod tests {
         let config = FlureeConfig::default();
         assert_eq!(config.host_port, 8090);
         assert!(config.data_mount.is_none());
-        assert!(config.detached);
     }
 
     #[test]
     #[parallel]
     fn test_custom_config() {
-        let config = FlureeConfig::new(9090, None, false);
+        let config = FlureeConfig::new(9090, None);
         assert_eq!(config.host_port, 9090);
         assert!(config.data_mount.is_none());
-        assert!(!config.detached);
     }
 
     #[test]
     #[parallel]
     fn test_invalid_port() {
-        let config = FlureeConfig::new(80, None, true);
+        let config = FlureeConfig::new(80, None);
         assert!(config.validate().is_err());
     }
 
     #[test]
     #[parallel]
     fn test_invalid_data_mount() {
-        let config = FlureeConfig::new(8090, Some(PathBuf::from("/nonexistent/path")), true);
+        let config = FlureeConfig::new(8090, Some(PathBuf::from("/nonexistent/path")));
         assert!(config.validate().is_err());
     }
 
@@ -141,7 +134,7 @@ mod tests {
     fn test_valid_data_mount() {
         // Create a temporary directory for testing
         let temp_dir = tempfile::tempdir().unwrap();
-        let config = FlureeConfig::new(8090, Some(temp_dir.path().to_path_buf()), true);
+        let config = FlureeConfig::new(8090, Some(temp_dir.path().to_path_buf()));
         assert!(config.validate().is_ok());
     }
 
@@ -157,7 +150,7 @@ mod tests {
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
-        let config = FlureeConfig::new(8090, Some(relative_path), true);
+        let config = FlureeConfig::new(8090, Some(relative_path));
         assert!(config.validate().is_ok());
 
         // Change back to the original directory

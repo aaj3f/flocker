@@ -604,7 +604,7 @@ impl DockerOperations for DockerManager {
         let mut filters = HashMap::new();
         filters.insert(
             String::from("reference"),
-            vec![String::from("fluree/server")],
+            vec![String::from("fluree/server*")],
         );
 
         let options = bollard::image::ListImagesOptions {
@@ -618,6 +618,8 @@ impl DockerOperations for DockerManager {
                 e
             ))
         })?;
+
+        tracing::debug!("Images: {:#?}", images);
 
         let mut fluree_images = Vec::new();
         for image in images {

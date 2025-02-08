@@ -298,17 +298,6 @@ impl CliState {
         Ok(Some(canonical_path))
     }
 
-    /// Get detach mode configuration from user
-    pub fn get_detach_config(&mut self) -> Result<bool> {
-        let (_, _, default_detached) = self.state.get_default_settings();
-
-        Confirm::with_theme(&self.theme)
-            .with_prompt("Run container in background (detached mode)?")
-            .default(default_detached)
-            .interact()
-            .map_err(|e| FlockerError::UserInput(e.to_string()))
-    }
-
     /// Get complete configuration from user
     pub async fn get_config(
         &mut self,
@@ -318,9 +307,8 @@ impl CliState {
         let name = self.get_container_name()?;
         let host_port = self.get_port_config()?;
         let data_mount = self.get_data_mount_config()?;
-        let detached = self.get_detach_config()?;
 
-        let config = FlureeConfig::new(host_port, data_mount.clone(), detached);
+        let config = FlureeConfig::new(host_port, data_mount.clone());
         config.validate()?;
 
         self.config = Some(config.clone());
