@@ -107,6 +107,18 @@ impl DockerOperations for MockDockerManager {
     async fn list_local_images(&self) -> flocker::Result<Vec<flocker::docker::FlureeImage>> {
         unimplemented!("Not needed for these tests")
     }
+
+    async fn get_container_stats(&self, _container_id: &str) -> flocker::Result<String> {
+        Ok("CONTAINER ID        CPU %               MEM USAGE / LIMIT     MEM %\ntest-container      0.00%               10.0MB / 100.0MB      10.00%".to_string())
+    }
+
+    async fn get_container_logs(
+        &self,
+        _container_id: &str,
+        _tail: Option<&str>,
+    ) -> flocker::Result<String> {
+        Ok("Mock container logs for testing".to_string())
+    }
 }
 
 fn create_test_container(id: &str, name: &str, port: u16) -> ContainerInfo {

@@ -47,6 +47,12 @@ pub trait DockerOperations {
     /// Delete a ledger
     async fn delete_ledger(&self, container_id: &str, path: &str) -> Result<()>;
 
+    /// Get container stats
+    async fn get_container_stats(&self, container_id: &str) -> Result<String>;
+
+    /// Get container logs
+    async fn get_container_logs(&self, container_id: &str, tail: Option<&str>) -> Result<String>;
+
     /// Pull a Docker image
     async fn pull_image(&self, tag: &str) -> Result<()>;
 
@@ -250,6 +256,87 @@ impl DockerOperations for DockerManager {
             .map_err(|e| FlockerError::Docker(format!("Failed to start container: {}", e)))?;
 
         Ok(container.id)
+    }
+
+    async fn get_container_stats(&self, container_id: &str) -> Result<String> {
+        let options = bollard::container::StatsOptions {
+            stream: false,
+            ..Default::default()
+        };
+
+        let mut stats = self.docker.stats(container_id, Some(options));
+
+        if let Some(result) = futures_util::StreamExt::next(&mut stats).await {
+            match result {
+                Ok(stats) => {
+                    // Format stats output similar to docker stats command
+                    let cpu_percent = if stats.cpu_stats.system_cpu_usage.is_some()
+                        && stats.precpu_stats.system_cpu_usage.is_some()
+                    {
+                        let cpu_delta = stats.cpu_stats.cpu_usage.total_usage as f64
+                            - stats.precpu_stats.cpu_usage.total_usage as f64;
+                        let system_delta = stats.cpu_stats.system_cpu_usage.unwrap() as f64
+                            - stats.precpu_stats.system_cpu_usage.unwrap() as f64;
+                        if system_delta > 0.0 && cpu_delta > 0.0 {
+                            (cpu_delta / system_delta)
+                                * 100.0
+                                * stats.cpu_stats.online_cpus.unwrap_or(1) as f64
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    };
+
+                    let mem_usage = stats.memory_stats.usage.unwrap_or(0);
+                    let mem_limit = stats.memory_stats.limit.unwrap_or(1);
+                    let mem_percent = (mem_usage as f64 / mem_limit as f64) * 100.0;
+
+                    Ok(format!(
+                        "CONTAINER ID        CPU %               MEM USAGE / LIMIT     MEM %\n{:<20} {:.2}%               {:.1}MB / {:.1}MB        {:.2}%",
+                        container_id,
+                        cpu_percent,
+                        mem_usage as f64 / 1024.0 / 1024.0,
+                        mem_limit as f64 / 1024.0 / 1024.0,
+                        mem_percent
+                    ))
+                }
+                Err(e) => Err(FlockerError::Docker(format!(
+                    "Failed to get container stats: {}",
+                    e
+                ))),
+            }
+        } else {
+            Err(FlockerError::Docker("No stats received".to_string()))
+        }
+    }
+
+    async fn get_container_logs(&self, container_id: &str, tail: Option<&str>) -> Result<String> {
+        let options = Some(bollard::container::LogsOptions::<String> {
+            stdout: true,
+            stderr: true,
+            tail: tail.map(|t| t.to_string()).unwrap_or_default(),
+            ..Default::default()
+        });
+
+        let mut logs = self.docker.logs(container_id, options);
+        let mut output = String::new();
+
+        while let Some(log) = futures_util::StreamExt::next(&mut logs).await {
+            match log {
+                Ok(log) => {
+                    output.push_str(&log.to_string());
+                }
+                Err(e) => {
+                    return Err(FlockerError::Docker(format!(
+                        "Failed to get container logs: {}",
+                        e
+                    )));
+                }
+            }
+        }
+
+        Ok(output)
     }
 
     async fn list_ledgers(&self, container_id: &str) -> Result<Vec<LedgerInfo>> {

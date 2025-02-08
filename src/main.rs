@@ -69,6 +69,36 @@ async fn main() -> flocker::Result<()> {
                 flocker::ContainerStatus::Running { .. } => {
                     let action = container_ui.display_action_menu(true)?;
                     match action {
+                        0 => {
+                            // View Container Stats
+                            let stats = docker.get_container_stats(&container_id).await?;
+                            println!("\n{}", stats);
+                            continue;
+                        }
+                        1 => {
+                            // View Container Logs
+                            let logs = docker
+                                .get_container_logs(&container_id, Some("100"))
+                                .await?;
+                            println!("\n{}", logs);
+                            continue;
+                        }
+                        2 => {
+                            // List Ledgers
+                            let ledgers = docker.list_ledgers(&container_id).await?;
+                            if ledgers.is_empty() {
+                                println!("\nNo ledgers found");
+                            } else {
+                                println!("\nLedgers:");
+                                for ledger in ledgers {
+                                    println!(
+                                        "\nAlias: {}\nLast Commit: {}\nCommit Count: {}\nSize: {} bytes",
+                                        ledger.alias, ledger.last_commit_time, ledger.commit_count, ledger.size
+                                    );
+                                }
+                            }
+                            continue;
+                        }
                         3 => {
                             // Stop Container
                             docker.stop_container(&container_id).await?;
