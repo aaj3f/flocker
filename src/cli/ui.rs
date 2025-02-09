@@ -791,7 +791,11 @@ impl CliState {
                     println!("Last started: {}", style(time).yellow());
                 }
 
-                let options = vec!["Start this container", "Destroy this container"];
+                let options = vec![
+                    "Start this container",
+                    "Get container logs",
+                    "Destroy this container",
+                ];
                 let selection = Select::with_theme(&self.theme)
                     .with_prompt("What would you like to do?")
                     .items(&options)
@@ -810,6 +814,13 @@ impl CliState {
                         println!("\n{}", style("Container started successfully").green());
                     }
                     1 => {
+                        // Get the last 1000 lines of logs
+                        let logs = docker.get_container_logs(&id, Some("1000")).await?;
+                        if let Ok(mut pager) = super::pager::Pager::new(&logs) {
+                            pager.display()?;
+                        }
+                    }
+                    2 => {
                         docker.remove_container(&id).await?;
                         println!("\n{}", style("Container removed successfully").green());
                         self.state.remove_container(&id)?;
