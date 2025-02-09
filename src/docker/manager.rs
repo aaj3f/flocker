@@ -9,6 +9,7 @@ use chrono::TimeZone;
 use futures_util::stream::StreamExt;
 use num_format::{Locale, ToFormattedString};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crate::cli::hub::Tag;
 use crate::error::FlockerError;
@@ -73,7 +74,7 @@ pub struct DockerManager {
 impl DockerManager {
     /// Create a new DockerManager instance
     pub async fn new() -> Result<Self> {
-        let docker = Docker::connect_with_local_defaults()
+        let docker = Docker::connect_with_unix_defaults()
             .map_err(|e| FlockerError::Docker(format!("Failed to connect to Docker: {}", e)))?;
         Ok(Self { docker })
     }
@@ -119,6 +120,7 @@ impl DockerOperations for DockerManager {
             .await
         {
             Ok(container) => {
+                tracing::debug!("Container: {:#?}", container);
                 let state = container.state.unwrap_or_default();
                 let running = state.running.unwrap_or(false);
 
@@ -146,13 +148,18 @@ impl DockerOperations for DockerManager {
                         .unwrap_or(8090);
 
                     // Extract data directory
-                    let data_dir = host_config.binds.and_then(|binds| binds.first().cloned());
-
+                    let data_dir = host_config
+                        .binds
+                        .clone()
+                        .and_then(|binds| binds.first().cloned());
+                    let config_dir = host_config.binds.and_then(|binds| binds.get(1).cloned());
+                    tracing::debug!("Data dir: {:?}", data_dir);
                     Ok(ContainerStatus::Running {
                         id: container_id.to_string(),
                         name,
                         port,
                         data_dir,
+                        config_dir,
                         started_at,
                     })
                 } else {
@@ -163,7 +170,10 @@ impl DockerOperations for DockerManager {
                     })
                 }
             }
-            Err(_) => Ok(ContainerStatus::NotFound),
+            Err(e) => {
+                tracing::debug!("Container not found: {:#?}", e);
+                Ok(ContainerStatus::NotFound)
+            }
         }
     }
 
@@ -222,22 +232,51 @@ impl DockerOperations for DockerManager {
             }]),
         );
 
-        // Convert path to Docker-compatible format
-        let binds = config.data_mount_path.as_ref().map(|path| {
-            let path = path.replace('\\', "/"); // Convert Windows paths to forward slashes
-            vec![format!("{}:/opt/fluree-server/data:rw", path)]
-        });
+        // Prepare bind mounts
+        let mut binds = Vec::new();
+
+        // Helper function to convert PathBuf to Docker mount string
+        let path_to_mount_string = |path: &PathBuf| -> Result<String> {
+            path.canonicalize()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .map_err(|e| FlockerError::Docker(format!("Failed to resolve path: {}", e)))
+        };
+
+        // Add data mount if specified
+        if let Some(path) = &config.data_mount_path {
+            let path_str = path_to_mount_string(path)?;
+            binds.push(format!("{}:/opt/fluree-server/data:rw", path_str));
+        }
+
+        // Add config mount if specified
+        if let Some(path) = &config.config_mount_path {
+            let path_str = path_to_mount_string(path)?;
+            binds.push(format!("{}:/opt/fluree-server/resources:ro", path_str));
+        }
 
         let host_config = bollard::models::HostConfig {
             port_bindings: Some(port_bindings),
-            binds,
+            binds: if !binds.is_empty() { Some(binds) } else { None },
             ..Default::default()
         };
+
+        // Prepare container config with optional command for config file
+        let cmd = config.config_file.as_ref().map(|config_file| {
+            vec![format!(
+                "--config=./resources/{}",
+                config_file
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            )]
+        });
 
         let container_config = Config {
             image: Some(image_tag.name().to_string()),
             exposed_ports: Some(exposed_ports),
             host_config: Some(host_config),
+            cmd,
             ..Default::default()
         };
 
@@ -263,14 +302,19 @@ impl DockerOperations for DockerManager {
         let data_dir = config
             .data_mount_path
             .as_ref()
-            .map(|path| crate::state::DataDirConfig::from_path_str(path));
+            .map(crate::state::DataDirConfig::from_path);
+
+        let config_dir = config
+            .config_mount_path
+            .as_ref()
+            .map(crate::state::DataDirConfig::from_path);
 
         let info = ContainerInfo::new(
             container_id,
             name.to_string(),
             config.host_port,
             data_dir,
-            true, // detached mode is handled in ContainerConfig
+            config_dir,
             image_tag.name().to_string(),
         );
 
@@ -318,11 +362,11 @@ impl DockerOperations for DockerManager {
 
                     // Get terminal width and calculate column widths
                     let term_width = get_terminal_width() as usize;
-                    let id_width = (term_width * 25) / 100; // 25% of width
-                    let cpu_width = (term_width * 15) / 100; // 15% of width
-                    let usage_width = (term_width * 25) / 100; // 25% of width
-                    let limit_width = (term_width * 20) / 100; // 20% of width
-                    let percent_width = (term_width * 15) / 100; // 15% of width
+                    let id_width = (term_width * 15) / 100;
+                    let cpu_width = (term_width * 10) / 100;
+                    let usage_width = (term_width * 10) / 100;
+                    let limit_width = (term_width * 10) / 100;
+                    let percent_width = (term_width * 10) / 100;
 
                     // Helper function to truncate strings
                     fn truncate(s: &str, width: usize) -> String {

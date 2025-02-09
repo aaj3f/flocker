@@ -194,6 +194,73 @@ impl CliState {
         Self::default()
     }
 
+    /// Get config file configuration from user
+    pub fn get_config_file_config(&mut self) -> Result<(Option<PathBuf>, Option<PathBuf>)> {
+        let use_config = Confirm::with_theme(&self.theme)
+            .with_prompt("Use a custom server configuration file?")
+            .default(false)
+            .interact()
+            .map_err(|e| FlockerError::UserInput(e.to_string()))?;
+
+        if !use_config {
+            return Ok((None, None));
+        }
+
+        let current_dir = std::env::current_dir()?;
+
+        let mut path_string_exists = false;
+        let mut full_path = PathBuf::new();
+
+        while !path_string_exists {
+            let path_str: String = Input::with_theme(&self.theme)
+                .with_prompt("Enter path to the config file")
+                .interact()
+                .map_err(|e| FlockerError::UserInput(e.to_string()))?;
+
+            // Expand ~ to home directory if present
+            let expanded_path = if path_str.starts_with('~') {
+                if let Ok(home) = std::env::var("HOME") {
+                    PathBuf::from(path_str.replacen('~', &home, 1))
+                } else {
+                    PathBuf::from(path_str)
+                }
+            } else {
+                PathBuf::from(path_str)
+            };
+
+            // Convert relative path to absolute path
+            full_path = if expanded_path.is_absolute() {
+                expanded_path
+            } else {
+                current_dir.join(expanded_path)
+            };
+
+            // Verify file exists
+            if full_path.exists() {
+                path_string_exists = true;
+            } else {
+                println!(
+                    "{} {}",
+                    style("File does not exist:").red().bold(),
+                    style(full_path.display()).cyan()
+                );
+            };
+        }
+
+        // Get the directory and file components
+        let config_dir = full_path.parent().ok_or_else(|| {
+            FlockerError::Config("Could not determine config directory".to_string())
+        })?;
+        let config_file = full_path.file_name().ok_or_else(|| {
+            FlockerError::Config("Could not determine config file name".to_string())
+        })?;
+
+        Ok((
+            Some(config_dir.to_path_buf()),
+            Some(PathBuf::from(config_file)),
+        ))
+    }
+
     /// Add a new container to state
     pub fn add_container(&mut self, info: ContainerInfo) -> Result<()> {
         self.state.add_container(info)
@@ -232,7 +299,7 @@ impl CliState {
 
     /// Get port configuration from user
     pub fn get_port_config(&mut self) -> Result<u16> {
-        let (default_port, _, _) = self.state.get_default_settings();
+        let (default_port, _) = self.state.get_default_settings();
 
         Input::with_theme(&self.theme)
             .with_prompt("Enter host port to map to container port 8090")
@@ -261,7 +328,7 @@ impl CliState {
         }
 
         let current_dir = std::env::current_dir()?;
-        let (_, default_data_dir, _) = self.state.get_default_settings();
+        let (_, default_data_dir) = self.state.get_default_settings();
         let default_path =
             default_data_dir.unwrap_or_else(|| DataDirConfig::from_current_dir(&current_dir));
 
@@ -271,11 +338,22 @@ impl CliState {
             .interact()
             .map_err(|e| FlockerError::UserInput(e.to_string()))?;
 
-        // Convert relative path to absolute path
-        let absolute_path = if PathBuf::from(&path_str).is_absolute() {
-            PathBuf::from(path_str)
+        // Expand ~ to home directory if present
+        let expanded_path = if path_str.starts_with('~') {
+            if let Ok(home) = std::env::var("HOME") {
+                PathBuf::from(path_str.replacen('~', &home, 1))
+            } else {
+                PathBuf::from(path_str)
+            }
         } else {
-            current_dir.join(&path_str)
+            PathBuf::from(path_str)
+        };
+
+        // Convert relative path to absolute path
+        let absolute_path = if expanded_path.is_absolute() {
+            expanded_path
+        } else {
+            current_dir.join(expanded_path)
         };
 
         // Create directory if it doesn't exist
@@ -307,8 +385,9 @@ impl CliState {
         let name = self.get_container_name()?;
         let host_port = self.get_port_config()?;
         let data_mount = self.get_data_mount_config()?;
+        let (config_mount, config_file) = self.get_config_file_config()?;
 
-        let config = FlureeConfig::new(host_port, data_mount.clone());
+        let config = FlureeConfig::new(host_port, data_mount, config_mount, config_file);
         config.validate()?;
 
         self.config = Some(config.clone());
@@ -424,8 +503,23 @@ impl CliState {
         &mut self,
         docker: &impl DockerOperations,
     ) -> Result<Option<String>> {
-        let containers = self.state.get_containers().to_vec(); // Clone to avoid borrow issues
-        if containers.is_empty() {
+        let state = self.state.clone();
+        let containers = state.get_containers().to_vec(); // Clone to avoid borrow issues
+
+        let mut found_containers = vec![];
+        for container in containers.into_iter() {
+            let status = docker.get_container_status(&container.id).await;
+            match status {
+                Ok(ContainerStatus::Running { .. }) | Ok(ContainerStatus::Stopped { .. }) => {
+                    found_containers.push(container);
+                }
+                _ => {
+                    self.state.remove_container(&container.id)?;
+                }
+            }
+        }
+
+        if found_containers.is_empty() {
             return Ok(None);
         }
 
@@ -439,7 +533,7 @@ impl CliState {
         let max_port_width = (term_width * 8) / 100; // 8% of width
         let max_time_width = (term_width * 30) / 100; // 30% of width
 
-        let mut name_width = 0;
+        let mut name_width = 10;
         let mut status_width = 0;
         let mut image_width = 0;
         let mut port_width = 0;
@@ -457,12 +551,12 @@ impl CliState {
         // Create container info strings
         let mut raw_items = vec![];
         let mut items = vec![];
-        for c in &containers {
+        for c in &found_containers {
             let status = docker
                 .get_container_status(&c.id)
                 .await
                 .unwrap_or(ContainerStatus::NotFound);
-
+            tracing::debug!("Container status: {:?}", status);
             let last_start = c
                 .last_start
                 .as_ref()
@@ -595,9 +689,11 @@ impl CliState {
         if selection == items.len() - 1 {
             return Ok(None);
         }
-
-        let selected_container = containers[selection].clone(); // Clone to avoid borrow issues
+        tracing::debug!("Selected container: {}", selection);
+        let selected_container = found_containers[selection].clone(); // Clone to avoid borrow issues
+        tracing::debug!("Selected container: {:?}", selected_container);
         let status = docker.get_container_status(&selected_container.id).await?;
+        debug!("Selected container status: {:?}", status);
 
         if matches!(status, ContainerStatus::NotFound) {
             println!(
@@ -625,6 +721,7 @@ impl CliState {
                 name,
                 port,
                 data_dir,
+                config_dir,
                 started_at: _,
             } => {
                 println!(
@@ -637,6 +734,10 @@ impl CliState {
                 if let Some(dir) = data_dir {
                     println!("Data directory: {}", style(dir).cyan());
                 }
+                if let Some(dir) = config_dir {
+                    println!("Config directory: {}", style(dir).cyan());
+                }
+                println!("\n");
 
                 let selection = Select::with_theme(&self.theme)
                     .with_prompt("What would you like to do?")
@@ -900,6 +1001,13 @@ impl CliState {
             );
         }
 
+        if let Some(config_dir) = &container.config_dir {
+            println!(
+                "Config directory: {}",
+                style(config_dir.absolute_path.display()).cyan()
+            );
+        }
+
         println!("\nFluree will be available at:");
         println!(
             "{}",
@@ -907,13 +1015,5 @@ impl CliState {
                 .cyan()
                 .underlined()
         );
-
-        if container.detached {
-            println!("\nTo view logs:");
-            println!(
-                "{}",
-                style(format!("docker logs {}", &container.id[..12])).cyan()
-            );
-        }
     }
 }

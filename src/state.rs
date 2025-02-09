@@ -30,16 +30,20 @@ impl DataDirConfig {
 
     /// Create a new DataDirConfig from a string path
     pub fn from_path_str(path_str: &str) -> Self {
-        let absolute_path = std::path::PathBuf::from(path_str);
+        Self::from_path(&std::path::PathBuf::from(path_str))
+    }
+
+    /// Create a new DataDirConfig from a PathBuf
+    pub fn from_path(path: &PathBuf) -> Self {
         let current_dir = std::env::current_dir().expect("Failed to get current directory");
-        let relative_path = if absolute_path.starts_with(&current_dir) {
-            pathdiff::diff_paths(&absolute_path, &current_dir)
+        let relative_path = if path.starts_with(&current_dir) {
+            pathdiff::diff_paths(path, &current_dir)
         } else {
             None
         };
         DataDirConfig {
             relative_path,
-            absolute_path,
+            absolute_path: path.clone(),
         }
     }
 
@@ -72,8 +76,8 @@ pub struct ContainerInfo {
     pub port: u16,
     /// Data directory configuration
     pub data_dir: Option<DataDirConfig>,
-    /// Whether container is running in detached mode
-    pub detached: bool,
+    /// Config directory configuration
+    pub config_dir: Option<DataDirConfig>,
     /// Image tag used for this container
     pub image_tag: String,
     /// Last start time
@@ -86,7 +90,7 @@ impl ContainerInfo {
         name: String,
         port: u16,
         data_dir: Option<DataDirConfig>,
-        detached: bool,
+        config_dir: Option<DataDirConfig>,
         image_tag: String,
     ) -> Self {
         let last_start =
@@ -96,7 +100,7 @@ impl ContainerInfo {
             name,
             port,
             data_dir,
-            detached,
+            config_dir,
             image_tag,
             last_start,
         }
@@ -209,14 +213,6 @@ impl State {
             .collect()
     }
 
-    /// Find containers by status
-    pub fn find_containers_by_status(&self, running: bool) -> Vec<&ContainerInfo> {
-        self.containers
-            .values()
-            .filter(|c| c.last_start.is_some() == running)
-            .collect()
-    }
-
     /// Get a container by ID
     pub fn get_container(&self, container_id: &str) -> Option<&ContainerInfo> {
         self.containers.get(container_id)
@@ -256,12 +252,12 @@ impl State {
     }
 
     /// Get the most recently used container's settings as defaults for a new container
-    pub fn get_default_settings(&self) -> (u16, Option<DataDirConfig>, bool) {
+    pub fn get_default_settings(&self) -> (u16, Option<DataDirConfig>) {
         self.containers
             .values()
             .max_by_key(|c| c.last_start.as_ref())
-            .map(|c| (c.port, c.data_dir.clone(), c.detached))
-            .unwrap_or((8090, None, true))
+            .map(|c| (c.port, c.data_dir.clone()))
+            .unwrap_or((8090, None))
     }
 
     /// Get the path to the config file
@@ -310,7 +306,7 @@ mod tests {
             "test".to_string(),
             8090,
             None,
-            true,
+            None,
             "latest".to_string(),
         );
         state.containers.insert(container.id.clone(), container);
@@ -346,7 +342,7 @@ mod tests {
             "test-1".to_string(),
             8090,
             None,
-            true,
+            None,
             "latest".to_string(),
         );
         state.add_container(container).unwrap();
@@ -385,7 +381,7 @@ mod tests {
             "test".to_string(),
             8090,
             None,
-            true,
+            None,
             "latest".to_string(),
         );
         state.add_container(container1).unwrap();
@@ -396,7 +392,7 @@ mod tests {
             "test".to_string(),
             8091,
             None,
-            true,
+            None,
             "latest".to_string(),
         );
         assert!(state.add_container(container2).is_err());
@@ -413,7 +409,7 @@ mod tests {
             "test-1".to_string(),
             8090,
             None,
-            true,
+            None,
             "latest".to_string(),
         );
         state.add_container(container1).unwrap();
@@ -423,7 +419,7 @@ mod tests {
             "test-2".to_string(),
             8091,
             None,
-            true,
+            None,
             "latest".to_string(),
         );
         container2.last_start = Some("2024-01-01T00:00:00Z".to_string());
@@ -433,15 +429,5 @@ mod tests {
         let found = state.find_containers_by_name("test-1");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, "test1");
-
-        // Test finding by status (running)
-        let running = state.find_containers_by_status(true);
-        assert_eq!(running.len(), 1);
-        assert_eq!(running[0].id, "test2");
-
-        // Test finding by status (stopped)
-        let stopped = state.find_containers_by_status(false);
-        assert_eq!(stopped.len(), 1);
-        assert_eq!(stopped[0].id, "test1");
     }
 }

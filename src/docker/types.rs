@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +31,9 @@ pub struct LedgerInfo {
 pub struct ContainerConfig {
     pub host_port: u16,
     pub container_port: u16,
-    pub data_mount_path: Option<String>,
+    pub data_mount_path: Option<PathBuf>,
+    pub config_mount_path: Option<PathBuf>,
+    pub config_file: Option<PathBuf>,
 }
 
 impl ContainerConfig {
@@ -48,10 +52,9 @@ impl From<&crate::config::FlureeConfig> for ContainerConfig {
         Self {
             host_port: config.host_port,
             container_port: 8090,
-            data_mount_path: config
-                .data_mount
-                .as_ref()
-                .map(|path| Self::path_to_mount_string(path)),
+            data_mount_path: config.data_mount.clone(),
+            config_mount_path: config.config_mount.clone(),
+            config_file: config.config_file.as_ref().map(PathBuf::from),
         }
     }
 }
@@ -62,6 +65,8 @@ impl Default for ContainerConfig {
             host_port: 8090,
             container_port: 8090,
             data_mount_path: None,
+            config_mount_path: None,
+            config_file: None,
         }
     }
 }

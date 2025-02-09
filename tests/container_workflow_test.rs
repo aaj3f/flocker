@@ -50,7 +50,7 @@ impl DockerOperations for MockDockerManager {
             name.to_string(),
             8090,
             None,
-            true,
+            None,
             image_tag.name().to_string(),
         ))
     }
@@ -94,7 +94,7 @@ fn create_test_container(id: &str, name: &str, port: u16) -> ContainerInfo {
         name.to_string(),
         port,
         None,
-        true,
+        None,
         "latest".to_string(),
     )
 }
@@ -118,6 +118,7 @@ async fn test_container_workflow() {
         name: "test-container".to_string(),
         port: 8090,
         data_dir: None,
+        config_dir: None,
         started_at: Some("2024-01-01T00:00:00Z".to_string()),
     };
     let docker = MockDockerManager::new(running_status);

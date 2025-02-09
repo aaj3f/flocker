@@ -31,6 +31,8 @@ pub enum ContainerStatus {
         port: u16,
         /// Data directory if mounted
         data_dir: Option<String>,
+        /// Config directory if mounted
+        config_dir: Option<String>,
         /// Last start time
         started_at: Option<String>,
     },

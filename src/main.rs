@@ -4,6 +4,7 @@
 //! with Docker operations.
 
 use clap::Parser;
+use console::style;
 use flocker::{
     cli::{Cli, CliState},
     docker::{DockerManager, DockerOperations},
@@ -54,9 +55,16 @@ async fn main() -> flocker::Result<()> {
         // Create new container
         debug!("Creating new container");
         let (image, config, name) = cli.get_config(&docker).await?;
-        let container = docker
+        let container = match docker
             .create_and_start_container(&image.tag, &config.clone().into_docker_config(), &name)
-            .await?;
+            .await
+        {
+            Ok(container) => container,
+            Err(e) => {
+                println!("{} {}", style("ERROR:").red(), e);
+                continue;
+            }
+        };
 
         // Add container to state and display success
         cli.add_container(container.clone())?;
